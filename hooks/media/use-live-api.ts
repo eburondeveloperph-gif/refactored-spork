@@ -20,7 +20,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { GenAILiveClient } from '../../lib/genai-live-client';
-import { LiveConnectConfig, Modality, LiveServerToolCall } from '@google/genai';
+import { LiveConnectConfig } from '@google/genai';
 import { AudioStreamer } from '../../lib/audio-streamer';
 import { audioContext } from '../../lib/utils';
 import VolMeterWorket from '../../lib/worklets/vol-meter';
@@ -76,50 +76,20 @@ export function useLiveApi({
     });
   }, []);
 
-  // register audio for streaming server -> speakers
   useEffect(() => {
-    if (!audioStreamerRef.current) {
-      console.log('🎵 Initializing AudioStreamer...');
-      audioContext({ id: 'audio-out' }).then((audioCtx: AudioContext) => {
-        console.log('🔊 AudioContext created:', audioCtx.state);
+    if (audioStreamerRef.current) return;
+    audioContext({ id: 'audio-out' })
+      .then((audioCtx: AudioContext) => {
         audioStreamerRef.current = new AudioStreamer(audioCtx);
-        console.log('✅ AudioStreamer initialized successfully');
-        
-        audioStreamerRef.current
-          .addWorklet<any>('vumeter-out', VolMeterWorket, (ev: any) => {
-            setVolume(ev.data.volume);
-          })
-          .then(() => {
-            console.log('📊 Volume meter worklet added successfully');
-          })
-          .catch(err => {
-            console.error('❌ Error adding volume meter worklet:', err);
-          });
-      }).catch((error) => {
-        console.error('❌ Failed to initialize AudioContext:', error);
-      });
-    }
-  }, [audioStreamerRef]);
+        return audioStreamerRef.current.addWorklet<any>('vumeter-out', VolMeterWorket, (ev: { data: { volume: number } }) => {
+          setVolume(ev.data.volume);
+        });
+      })
+      .catch((err) => console.error('AudioStreamer init failed:', err));
+  }, []);
 
-  // VAD event handlers
   useEffect(() => {
-    const handleSpeechEnd = (data: any) => {
-      setIsUserSpeaking(false);
-      // Trigger turn completion when user stops speaking
-      // This allows the system to skip waiting for natural turn completion
-      console.log('User stopped speaking, triggering turn completion');
-    };
-
-    const handleVADEnergy = (data: any) => {
-      setVadEnergy(data.value);
-      setIsUserSpeaking(data.isSpeech);
-    };
-
-    // These would be set up when audio recorder is initialized
-    // For now, we'll set up basic VAD state tracking
-    return () => {
-      // Cleanup VAD listeners
-    };
+    return () => {};
   }, []);
 
   // Emotion and prosody event handlers
@@ -167,30 +137,13 @@ export function useLiveApi({
     };
 
     const onAudio = (data: ArrayBuffer) => {
-      console.log('🔊 Audio data received:', { 
-        size: data.byteLength, 
-        audioStreamerExists: !!audioStreamerRef.current 
-      });
-      
-      if (audioStreamerRef.current) {
-        console.log('📢 Adding PCM16 data to audio streamer');
-        
-        // Ensure audio context is resumed for autoplay policy
-        if (audioStreamerRef.current.context.state === 'suspended') {
-          console.log('🔄 Resuming suspended AudioContext for autoplay');
-          audioStreamerRef.current.context.resume().then(() => {
-            console.log('✅ AudioContext resumed successfully');
-            audioStreamerRef.current!.addPCM16(new Uint8Array(data));
-          }).catch((error) => {
-            console.error('❌ Failed to resume AudioContext:', error);
-            // Still try to add audio even if resume fails
-            audioStreamerRef.current!.addPCM16(new Uint8Array(data));
-          });
-        } else {
-          audioStreamerRef.current.addPCM16(new Uint8Array(data));
-        }
+      if (!audioStreamerRef.current) return;
+      const streamer = audioStreamerRef.current;
+      const addAudio = () => streamer.addPCM16(new Uint8Array(data));
+      if (streamer.context.state === 'suspended') {
+        streamer.context.resume().then(addAudio).catch(addAudio);
       } else {
-        console.warn('⚠️ Audio data received but no audio streamer available');
+        addAudio();
       }
     };
 

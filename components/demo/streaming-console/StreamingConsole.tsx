@@ -1,21 +1,16 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
-*/
-import { useEffect, useRef } from 'react';
-import WelcomeScreen from '../welcome-screen/WelcomeScreen';
-// FIX: Import LiveServerContent to correctly type the content handler.
-import { Modality, LiveServerContent } from '@google/genai';
+ */
 
+import { useEffect, useCallback } from 'react';
+import { LiveServerContent } from '@google/genai';
+import WelcomeScreen from '../welcome-screen/WelcomeScreen';
 import { useLiveAPIContext } from '../../../contexts/LiveAPIContext';
-import {
-  useSettings,
-  useLogStore,
-  ConversationTurn,
-} from '../../../lib/state';
+import { useSettings, useLogStore } from '../../../lib/state';
 import { useHistoryStore } from '../../../lib/history';
 import { useAuth, updateUserConversations } from '../../../lib/auth';
-import { GENIUS_MODE_PROMPT, PURE_TRANSLATION_PROMPT, NATURAL_EXPRESSION_PROMPT } from '../../../lib/prompts';
+import { PURE_TRANSLATION_PROMPT } from '../../../lib/prompts';
 import { getTrainingExamples, TRAINING_DATA } from '../../../lib/training';
 
 export default function StreamingConsole() {
@@ -24,32 +19,20 @@ export default function StreamingConsole() {
   const { addHistoryItem } = useHistoryStore();
   const { user } = useAuth();
 
-  const turns = useLogStore(state => state.turns);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  // Create dynamic system prompt with language mapping, genius mode, and training examples
-  const createSystemPrompt = () => {
+  const createSystemPrompt = useCallback(() => {
     const topicContext = topic?.trim()
-      ? `The conversation is about: "${topic}". Use this context from the first word—apply appropriate terminology, register, and domain knowledge immediately.`
-      : 'No specific topic provided. Infer domain from context from the first utterance.';
-    const geniusPrompt = GENIUS_MODE_PROMPT.replace('{topic_context}', topicContext);
+      ? `The conversation is about: "${topic}". Use this context to apply appropriate terminology and domain knowledge.`
+      : '';
     const translationPrompt = PURE_TRANSLATION_PROMPT;
     const trainingExamples = getTrainingExamples(language1, language2, TRAINING_DATA);
 
-    const finalPrompt =
-      geniusPrompt +
-      '\n\n---\n\n' +
-      translationPrompt +
-      '\n\n' +
-      NATURAL_EXPRESSION_PROMPT +
-      trainingExamples;
+    const finalPrompt = translationPrompt + (topicContext ? '\n\n' + topicContext : '') + trainingExamples;
 
     return finalPrompt;
-  };
+  }, [language1, language2, topic]);
 
-  // Set the configuration for the Live API
   useEffect(() => {
-    const config: any = {
+    const config = {
       responseModalities: 'AUDIO',
       // Enable transcription so we receive inputTranscription (user speech) and outputTranscription (model translation)
       inputAudioTranscription: {},
@@ -77,7 +60,7 @@ export default function StreamingConsole() {
     // Add TTS parameters for nuance mimicry
     const ttsParams = getTTSParameters();
     if (ttsParams) {
-      config.speechConfig.nuanceParams = {
+      (config.speechConfig as Record<string, unknown>).nuanceParams = {
         pitch: ttsParams.pitch,
         rate: ttsParams.rate,
         volume: ttsParams.volume,
@@ -87,30 +70,18 @@ export default function StreamingConsole() {
       };
     }
 
-    setConfig(config);
-  }, [setConfig, systemPrompt, voice, getTTSParameters, language1, language2, topic]);
+    setConfig(config as unknown as Parameters<typeof setConfig>[0]);
+  }, [setConfig, createSystemPrompt, voice, getTTSParameters, language1, language2, topic]);
 
   useEffect(() => {
     const { addTurn, updateLastTurn } = useLogStore.getState();
 
     const handleInputTranscription = (text: string, isFinal: boolean) => {
-      console.log('🎤 Input transcription received:', { text, isFinal, length: text.length });
-      
       const turns = useLogStore.getState().turns;
       const last = turns[turns.length - 1];
-      
-      console.log('📝 Current turns:', turns.length);
-      console.log('👤 Last turn:', last ? { role: last.role, text: last.text, isFinal: last.isFinal } : 'none');
-      
       if (last && last.role === 'user' && !last.isFinal) {
-        const newText = last.text + text;
-        console.log('➕ Accumulating text:', { oldText: last.text, addText: text, newText });
-        updateLastTurn({
-          text: newText,
-          isFinal,
-        });
+        updateLastTurn({ text: last.text + text, isFinal });
       } else {
-        console.log('🆕 Creating new user turn:', { text, isFinal });
         addTurn({ role: 'user', text, isFinal });
       }
     };
@@ -137,27 +108,13 @@ export default function StreamingConsole() {
     };
 
     const handleOutputTranscription = (text: string, isFinal: boolean) => {
-      console.log('🤖 Output transcription received:', { text, isFinal, length: text.length });
-      
       const cleaned = cleanDisplayText(text);
-      console.log('🧹 Cleaned text:', cleaned);
       if (!cleaned) return;
-      
       const turns = useLogStore.getState().turns;
       const last = turns[turns.length - 1];
-      
-      console.log('📝 Agent turns:', turns.length);
-      console.log('🤖 Last agent turn:', last ? { role: last.role, text: last.text, isFinal: last.isFinal } : 'none');
-      
       if (last && last.role === 'agent' && !last.isFinal) {
-        const newText = last.text + cleaned;
-        console.log('➕ Accumulating agent text:', { oldText: last.text, addText: cleaned, newText });
-        updateLastTurn({
-          text: newText,
-          isFinal,
-        });
+        updateLastTurn({ text: last.text + cleaned, isFinal });
       } else {
-        console.log('🆕 Creating new agent turn:', { text: cleaned, isFinal });
         addTurn({ role: 'agent', text: cleaned, isFinal });
       }
     };
