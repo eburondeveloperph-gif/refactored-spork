@@ -33,11 +33,13 @@ export class AudioStreamer {
   private isStreamComplete: boolean = false;
   private checkInterval: number | null = null;
   private scheduledTime: number = 0;
-  private initialBufferTime: number = 0.1; //0.1 // 100ms initial buffer
+  private initialBufferTime: number = 0.01; // Reduced from 0.1 to 10ms for minimal delay
   // Web Audio API nodes. source => gain => destination
   public gainNode: GainNode;
   public source: AudioBufferSourceNode;
   private endOfQueueAudioSource: AudioBufferSourceNode | null = null;
+  private audioCompletionPromise: Promise<void> | null = null;
+  private resolveAudioCompletion: (() => void) | null = null;
 
   public onComplete = () => {};
 
@@ -106,6 +108,14 @@ export class AudioStreamer {
   addPCM16(chunk: Uint8Array) {
     // Reset the stream complete flag when a new chunk is added.
     this.isStreamComplete = false;
+    
+    // Initialize audio completion promise if not exists
+    if (!this.audioCompletionPromise) {
+      this.audioCompletionPromise = new Promise<void>((resolve) => {
+        this.resolveAudioCompletion = resolve;
+      });
+    }
+    
     // Process the chunk into a Float32Array
     let processingBuffer = this._processPCM16Chunk(chunk);
     // Add the processed buffer to the queue if it's larger than the buffer size.
@@ -139,7 +149,7 @@ export class AudioStreamer {
   }
 
   private scheduleNextBuffer() {
-    const SCHEDULE_AHEAD_TIME = 0.2;
+    const SCHEDULE_AHEAD_TIME = 0.05; // Reduced from 0.2 to 50ms for faster response
 
     while (
       this.audioQueue.length > 0 &&
@@ -160,6 +170,12 @@ export class AudioStreamer {
             this.endOfQueueAudioSource === source
           ) {
             this.endOfQueueAudioSource = null;
+            // Resolve audio completion promise when all audio is played
+            if (this.resolveAudioCompletion) {
+              this.resolveAudioCompletion();
+              this.resolveAudioCompletion = null;
+              this.audioCompletionPromise = null;
+            }
             this.onComplete();
           }
         };
@@ -203,7 +219,7 @@ export class AudioStreamer {
             if (this.audioQueue.length > 0) {
               this.scheduleNextBuffer();
             }
-          }, 100) as unknown as number;
+          }, 25) as unknown as number; // Reduced from 100ms to 25ms for faster checking
         }
       }
     } else {
@@ -211,7 +227,7 @@ export class AudioStreamer {
         (this.scheduledTime - this.context.currentTime) * 1000;
       setTimeout(
         () => this.scheduleNextBuffer(),
-        Math.max(0, nextCheckTime - 50)
+        Math.max(0, nextCheckTime - 10) // Reduced from 50ms to 10ms for tighter scheduling
       );
     }
   }
@@ -236,7 +252,7 @@ export class AudioStreamer {
       this.gainNode.disconnect();
       this.gainNode = this.context.createGain();
       this.gainNode.connect(this.context.destination);
-    }, 200);
+    }, 50); // Reduced from 200ms to 50ms for faster resume
   }
 
   async resume() {
@@ -250,7 +266,28 @@ export class AudioStreamer {
 
   complete() {
     this.isStreamComplete = true;
-    this.onComplete();
+    // Don't call onComplete immediately - wait for audio to finish
+    if (this.audioQueue.length === 0 && !this.isPlaying) {
+      this.onComplete();
+    }
+  }
+
+  // Method to wait for audio completion
+  async waitForCompletion(): Promise<void> {
+    if (this.audioCompletionPromise) {
+      return this.audioCompletionPromise;
+    }
+    // If no audio is playing, return immediately
+    if (!this.isPlaying && this.audioQueue.length === 0) {
+      return Promise.resolve();
+    }
+    // Create a new promise if needed
+    return new Promise<void>((resolve) => {
+      this.resolveAudioCompletion = resolve;
+      this.audioCompletionPromise = new Promise<void>((r) => {
+        this.resolveAudioCompletion = r;
+      });
+    });
   }
 }
 

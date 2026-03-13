@@ -52,11 +52,11 @@ export const useSettings = create<{
   setLanguage2: (language: string) => void;
   setTopic: (topic: string) => void;
 }>((set, get) => ({
-  systemPrompt: generateSystemPrompt('English (US)', 'Dutch', ''),
+  systemPrompt: generateSystemPrompt('English (US)', 'Dutch (Flemish)', ''),
   model: DEFAULT_LIVE_API_MODEL,
   voice: DEFAULT_VOICE,
   language1: 'English (US)',
-  language2: 'Dutch',
+  language2: 'Dutch (Flemish)',
   topic: '',
   setSystemPrompt: prompt => set({ systemPrompt: prompt }),
   setModel: model => set({ model }),

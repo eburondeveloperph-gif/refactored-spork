@@ -9,7 +9,9 @@ export default function Header() {
 
   return (
     <header>
-      <div className="header-left"></div>
+      <div className="header-left">
+        <h1>Eburon Translator</h1>
+      </div>
       <div className="header-right">
         <button
           className="settings-button"

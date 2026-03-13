@@ -38,6 +38,12 @@ export type UseLiveApiResults = {
   volume: number;
   isTtsMuted: boolean;
   toggleTtsMute: () => void;
+  waitForAudioCompletion: () => Promise<void>;
+  isUserSpeaking: boolean;
+  vadEnergy: number;
+  emotionProfile: any;
+  prosodyFeatures: any;
+  getTTSParameters: () => any;
 };
 
 export function useLiveApi({
@@ -54,6 +60,11 @@ export function useLiveApi({
   const [connected, setConnected] = useState(false);
   const [config, setConfig] = useState<LiveConnectConfig>({});
   const [isTtsMuted, setIsTtsMuted] = useState(false);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  const [vadEnergy, setVadEnergy] = useState(0);
+  const [emotionProfile, setEmotionProfile] = useState(null);
+  const [prosodyFeatures, setProsodyFeatures] = useState(null);
+  const audioRecorderRef = useRef<any>(null);
 
   const toggleTtsMute = useCallback(() => {
     setIsTtsMuted(prev => {
@@ -68,21 +79,77 @@ export function useLiveApi({
   // register audio for streaming server -> speakers
   useEffect(() => {
     if (!audioStreamerRef.current) {
+      console.log('🎵 Initializing AudioStreamer...');
       audioContext({ id: 'audio-out' }).then((audioCtx: AudioContext) => {
+        console.log('🔊 AudioContext created:', audioCtx.state);
         audioStreamerRef.current = new AudioStreamer(audioCtx);
+        console.log('✅ AudioStreamer initialized successfully');
+        
         audioStreamerRef.current
           .addWorklet<any>('vumeter-out', VolMeterWorket, (ev: any) => {
             setVolume(ev.data.volume);
           })
           .then(() => {
-            // Successfully added worklet
+            console.log('📊 Volume meter worklet added successfully');
           })
           .catch(err => {
-            console.error('Error adding worklet:', err);
+            console.error('❌ Error adding volume meter worklet:', err);
           });
+      }).catch((error) => {
+        console.error('❌ Failed to initialize AudioContext:', error);
       });
     }
   }, [audioStreamerRef]);
+
+  // VAD event handlers
+  useEffect(() => {
+    const handleSpeechEnd = (data: any) => {
+      setIsUserSpeaking(false);
+      // Trigger turn completion when user stops speaking
+      // This allows the system to skip waiting for natural turn completion
+      console.log('User stopped speaking, triggering turn completion');
+    };
+
+    const handleVADEnergy = (data: any) => {
+      setVadEnergy(data.value);
+      setIsUserSpeaking(data.isSpeech);
+    };
+
+    // These would be set up when audio recorder is initialized
+    // For now, we'll set up basic VAD state tracking
+    return () => {
+      // Cleanup VAD listeners
+    };
+  }, []);
+
+  // Emotion and prosody event handlers
+  useEffect(() => {
+    const handleProsodyFeatures = (features: any) => {
+      setProsodyFeatures(features);
+    };
+
+    const handleEmotionProfile = (profile: any) => {
+      setEmotionProfile(profile);
+    };
+
+    return () => {
+      // Cleanup emotion listeners
+    };
+  }, []);
+
+  const getTTSParameters = useCallback(() => {
+    if (audioRecorderRef.current) {
+      return audioRecorderRef.current.getTTSParameters();
+    }
+    return {
+      pitch: 1.0,
+      rate: 1.0,
+      volume: 1.0,
+      emphasis: [1.0],
+      pauses: [200],
+      intonation: 'moderate'
+    };
+  }, []);
 
   useEffect(() => {
     const onOpen = () => {
@@ -100,8 +167,30 @@ export function useLiveApi({
     };
 
     const onAudio = (data: ArrayBuffer) => {
+      console.log('🔊 Audio data received:', { 
+        size: data.byteLength, 
+        audioStreamerExists: !!audioStreamerRef.current 
+      });
+      
       if (audioStreamerRef.current) {
-        audioStreamerRef.current.addPCM16(new Uint8Array(data));
+        console.log('📢 Adding PCM16 data to audio streamer');
+        
+        // Ensure audio context is resumed for autoplay policy
+        if (audioStreamerRef.current.context.state === 'suspended') {
+          console.log('🔄 Resuming suspended AudioContext for autoplay');
+          audioStreamerRef.current.context.resume().then(() => {
+            console.log('✅ AudioContext resumed successfully');
+            audioStreamerRef.current!.addPCM16(new Uint8Array(data));
+          }).catch((error) => {
+            console.error('❌ Failed to resume AudioContext:', error);
+            // Still try to add audio even if resume fails
+            audioStreamerRef.current!.addPCM16(new Uint8Array(data));
+          });
+        } else {
+          audioStreamerRef.current.addPCM16(new Uint8Array(data));
+        }
+      } else {
+        console.warn('⚠️ Audio data received but no audio streamer available');
       }
     };
 
@@ -133,6 +222,13 @@ export function useLiveApi({
     setConnected(false);
   }, [setConnected, client]);
 
+  const waitForAudioCompletion = useCallback(async () => {
+    if (audioStreamerRef.current) {
+      return audioStreamerRef.current.waitForCompletion();
+    }
+    return Promise.resolve();
+  }, []);
+
   return {
     client,
     config,
@@ -143,5 +239,11 @@ export function useLiveApi({
     volume,
     isTtsMuted,
     toggleTtsMute,
+    waitForAudioCompletion,
+    isUserSpeaking,
+    vadEnergy,
+    emotionProfile,
+    prosodyFeatures,
+    getTTSParameters,
   };
 }

@@ -21,9 +21,13 @@
 import { audioContext } from './utils';
 import AudioRecordingWorklet from './worklets/audio-processing';
 import VolMeterWorket from './worklets/vol-meter';
+import VADWorklet from './worklets/vad-worklet';
+import ProsodyWorklet from './worklets/prosody-worklet';
 
 import { createWorketFromSrc } from './audioworklet-registry';
 import EventEmitter from 'eventemitter3';
+import { VADManager } from './vad-manager';
+import { EmotionAnalyzer, ProsodyFeatures } from './emotion-analyzer';
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   var binary = '';
@@ -50,10 +54,16 @@ export class AudioRecorder {
   recording: boolean = false;
   recordingWorklet: AudioWorkletNode | undefined;
   vuWorklet: AudioWorkletNode | undefined;
+  vadManager: VADManager | undefined;
+  prosodyWorklet: AudioWorkletNode | undefined;
+  emotionAnalyzer: EmotionAnalyzer;
+  compressor: DynamicsCompressorNode | undefined;
 
   private starting: Promise<void> | null = null;
 
-  constructor(public sampleRate = 16000) {}
+  constructor(public sampleRate = 16000) {
+    this.emotionAnalyzer = new EmotionAnalyzer();
+  }
 
   async start() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -81,17 +91,31 @@ export class AudioRecorder {
       lowpassFilter.frequency.setValueAtTime(8000, this.audioContext.currentTime); // Cut noise above 8kHz
 
       // Create a compressor to normalize volume
-      const compressor = this.audioContext.createDynamicsCompressor();
-      compressor.threshold.setValueAtTime(-50, this.audioContext.currentTime);
-      compressor.knee.setValueAtTime(40, this.audioContext.currentTime);
-      compressor.ratio.setValueAtTime(12, this.audioContext.currentTime);
-      compressor.attack.setValueAtTime(0, this.audioContext.currentTime);
-      compressor.release.setValueAtTime(0.25, this.audioContext.currentTime);
+      this.compressor = this.audioContext.createDynamicsCompressor();
+      this.compressor.threshold.setValueAtTime(-50, this.audioContext.currentTime);
+      this.compressor.knee.setValueAtTime(40, this.audioContext.currentTime);
+      this.compressor.ratio.setValueAtTime(12, this.audioContext.currentTime);
+      this.compressor.attack.setValueAtTime(0, this.audioContext.currentTime);
+      this.compressor.release.setValueAtTime(0.25, this.audioContext.currentTime);
 
       // Chain the nodes: source -> highpass -> lowpass -> compressor -> worklets
       this.source.connect(highpassFilter);
       highpassFilter.connect(lowpassFilter);
-      lowpassFilter.connect(compressor);
+      lowpassFilter.connect(this.compressor);
+
+      // Initialize VAD Manager
+      this.vadManager = new VADManager(this.audioContext);
+      
+      // Set up VAD event handlers
+      this.vadManager.on('speechEnd', (data: any) => {
+        // Emit speech end event for turn management
+        this.emitter.emit('speechEnd', data);
+      });
+
+      this.vadManager.on('energy', (data: any) => {
+        // Emit energy updates for visualization
+        this.emitter.emit('vadEnergy', data);
+      });
 
       const workletName = 'audio-recorder-worklet';
       const src = createWorketFromSrc(workletName, AudioRecordingWorklet);
@@ -112,7 +136,7 @@ export class AudioRecorder {
           this.emitter.emit('data', arrayBufferString);
         }
       };
-      compressor.connect(this.recordingWorklet);
+      this.compressor.connect(this.recordingWorklet);
 
       // vu meter worklet
       const vuWorkletName = 'vu-meter';
@@ -125,7 +149,35 @@ export class AudioRecorder {
         this.emitter.emit('volume', ev.data.volume);
       };
 
-      compressor.connect(this.vuWorklet);
+      this.compressor.connect(this.vuWorklet);
+
+      // Initialize VAD after all audio nodes are set up
+      await this.vadManager.initialize(this.compressor);
+
+      // Initialize Prosody Worklet
+      const prosodyWorkletName = 'prosody-worklet';
+      await this.audioContext.audioWorklet.addModule(
+        createWorketFromSrc(prosodyWorkletName, ProsodyWorklet)
+      );
+      this.prosodyWorklet = new AudioWorkletNode(this.audioContext, prosodyWorkletName);
+      
+      this.prosodyWorklet.port.onmessage = (ev: MessageEvent) => {
+        if (ev.data.type === 'prosodyFeatures') {
+          const features: ProsodyFeatures = ev.data.features;
+          this.emotionAnalyzer.addFeatures(features);
+          
+          // Emit prosody features for real-time analysis
+          this.emitter.emit('prosodyFeatures', features);
+          
+          // Emit emotion profile updates
+          const emotionProfile = this.emotionAnalyzer.getEmotionProfile();
+          if (emotionProfile) {
+            this.emitter.emit('emotionProfile', emotionProfile);
+          }
+        }
+      };
+      
+      this.compressor.connect(this.prosodyWorklet);
       this.recording = true;
       resolve();
       this.starting = null;
@@ -141,11 +193,27 @@ export class AudioRecorder {
       this.stream = undefined;
       this.recordingWorklet = undefined;
       this.vuWorklet = undefined;
+      this.vadManager?.destroy();
+      this.vadManager = undefined;
+      this.prosodyWorklet?.disconnect();
+      this.prosodyWorklet = undefined;
+      this.emotionAnalyzer.reset();
+      this.compressor = undefined;
     };
     if (this.starting) {
       this.starting.then(handleStop);
       return;
     }
     handleStop();
+  }
+
+  // Method to get current emotion profile for TTS
+  getEmotionProfile() {
+    return this.emotionAnalyzer.getEmotionProfile();
+  }
+
+  // Method to get TTS parameters for nuance mimicry
+  getTTSParameters() {
+    return this.emotionAnalyzer.generateTTSParameters();
   }
 }

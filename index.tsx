@@ -18,10 +18,16 @@
  * limitations under the License.
  */
 
+import '@vite/client'
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 
 import App from './App';
+
+// React DevTools for development
+if (process.env.NODE_ENV === 'development') {
+  import('@tanstack/react-devtools')
+}
 
 const root = ReactDOM.createRoot(
   document.getElementById('root') as HTMLElement
