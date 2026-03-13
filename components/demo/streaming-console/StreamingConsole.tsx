@@ -4,7 +4,7 @@
  */
 
 import { useEffect, useCallback } from 'react';
-import { LiveServerContent } from '@google/genai';
+import { LiveServerContent, Modality } from '@google/genai';
 import WelcomeScreen from '../welcome-screen/WelcomeScreen';
 import { useLiveAPIContext } from '../../../contexts/LiveAPIContext';
 import { useSettings, useLogStore } from '../../../lib/state';
@@ -15,35 +15,31 @@ import { getTrainingExamples, TRAINING_DATA } from '../../../lib/training';
 
 export default function StreamingConsole() {
   const { client, setConfig, waitForAudioCompletion, getTTSParameters } = useLiveAPIContext();
-  const { systemPrompt, voice, language1, language2, topic } = useSettings();
+  const { voice, language1, language2, topic } = useSettings();
   const { addHistoryItem } = useHistoryStore();
   const { user } = useAuth();
 
   const createSystemPrompt = useCallback(() => {
+    const langPair = `## LANGUAGE PAIR\nGuest language: ${language1}. Staff language: ${language2}.\n- Input in ${language1} → output in ${language2}\n- Input in ${language2} → output in ${language1}\n- Input in ANY other language → output in ${language2}\n\n## SPECIFIC LANGUAGE RULES\n- English → Dutch Flemish\n- Dutch Flemish → English\n- Thai → Dutch Flemish\n- Arabic → Dutch Flemish\n- NEVER output in the same language as input\n\n`;
     const topicContext = topic?.trim()
-      ? `The conversation is about: "${topic}". Use this context to apply appropriate terminology and domain knowledge.`
+      ? `Topic: "${topic}". Use appropriate terminology.\n\n`
       : '';
     const translationPrompt = PURE_TRANSLATION_PROMPT;
     const trainingExamples = getTrainingExamples(language1, language2, TRAINING_DATA);
 
-    const finalPrompt = translationPrompt + (topicContext ? '\n\n' + topicContext : '') + trainingExamples;
-
-    return finalPrompt;
+    return langPair + translationPrompt + topicContext + trainingExamples;
   }, [language1, language2, topic]);
 
   useEffect(() => {
     const config = {
-      responseModalities: 'AUDIO',
-      // Enable transcription so we receive inputTranscription (user speech) and outputTranscription (model translation)
+      responseModalities: [Modality.AUDIO],
       inputAudioTranscription: {},
       outputAudioTranscription: {},
-      // Genius mode: focused, high-intelligence generation
       generationConfig: {
         temperature: 0.35,
         topP: 0.95,
         topK: 40,
       },
-      // Disable thinking output - only show final translation
       thinkingConfig: { includeThoughts: false },
       speechConfig: {
         voiceConfig: {
@@ -89,8 +85,10 @@ export default function StreamingConsole() {
     const cleanDisplayText = (raw: string): string => {
       if (!raw?.trim()) return '';
       let s = raw;
+      // Strip thinking/reasoning
       s = s.replace(/^(?:Thought|Thinking|Let me think|Hmm,?|First I need to|I need to)[^.]*\.?\s*/gim, '');
       s = s.replace(/^\[?(?:thought|reasoning|internal)[\s\S]*?\]\s*/gim, '');
+      // Strip SSML tags
       s = s.replace(/<speak[^>]*>|<\/speak>/gi, '');
       s = s.replace(/<prosody[^>]*>|<\/prosody>/gi, '');
       s = s.replace(/<break[^>]*\/?>/gi, ' ');
@@ -102,8 +100,14 @@ export default function StreamingConsole() {
       s = s.replace(/<audio[^>]*>|<\/audio>/gi, '');
       s = s.replace(/<[^>]+>/g, '');
       s = s.replace(/\*\*[^*]+\*\*/g, '');
+      // Strip metadata (never spoken or displayed)
       s = s.replace(/^Translating[^:]*:\s*/gi, '');
+      s = s.replace(/^Translation in [^:]+:\s*/gi, '');
+      s = s.replace(/\s*\(TTS audio\)\s*$/gi, '');
       s = s.replace(/^\[.*?\]\s*/g, '');
+      s = s.replace(/\s+debug\s*$/gi, '');
+      // Fix missing space after sentence punctuation
+      s = s.replace(/([.!?,])([A-Za-zÀ-ÿ])/g, '$1 $2');
       return s.trim();
     };
 

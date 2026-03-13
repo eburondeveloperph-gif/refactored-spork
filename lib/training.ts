@@ -40,9 +40,18 @@ function matchesLanguage(settingLang: string, trainingLang: string): boolean {
   return aliases.some(a => a.toLowerCase().includes(setting) || setting.includes(a.toLowerCase()));
 }
 
+/** Strip metadata from training conversation lines so model learns clean format only */
+function normalizeConversationLine(line: string): string {
+  // "Translation in Dutch Flemish: \"Hallo...\" (TTS audio)" → "Hallo..."
+  let s = line.replace(/^Translation in [^:]+:\s*/gi, '');
+  s = s.replace(/\s*\(TTS audio\)\s*$/gi, '');
+  s = s.replace(/^["']|["']$/g, '').trim();
+  return s;
+}
+
 /**
  * Get training examples for the current language pair.
- * Returns up to 2 conversation excerpts (first 3 exchanges each) to keep prompt size manageable.
+ * Returns normalized excerpts (metadata stripped) so the model learns translation-only output.
  */
 export function getTrainingExamples(
   language1: string,
@@ -58,19 +67,27 @@ export function getTrainingExamples(
     const convLang = conv.language;
     if (!targetLangs.some(l => matchesLanguage(l, convLang))) continue;
 
-    // Extract first 3 Guest/Translation pairs as a compact example
     const lines = conv.conversation.split('\n\n').slice(0, 6);
-    const excerpt = lines.join('\n\n');
-    if (excerpt.length > 800) {
-      examples.push(`[${convLang} example - first exchanges]\n${excerpt.substring(0, 800)}...`);
+    const normalized: string[] = [];
+    for (const line of lines) {
+      if (line.startsWith('Guest:') || line.startsWith('Staff:')) {
+        normalized.push(line);
+      } else {
+        const translation = normalizeConversationLine(line);
+        if (translation) normalized.push(translation);
+      }
+    }
+    const excerpt = normalized.join('\n');
+    if (excerpt.length > 600) {
+      examples.push(`[${convLang}]\n${excerpt.substring(0, 600)}...`);
     } else {
-      examples.push(`[${convLang} example]\n${excerpt}`);
+      examples.push(`[${convLang}]\n${excerpt}`);
     }
     if (examples.length >= 2) break;
   }
 
   if (examples.length === 0) return '';
-  return `\n\n## TRAINING EXAMPLES (learn from these patterns)\n\n${examples.join('\n\n---\n\n')}`;
+  return `\n\n## EXAMPLES (output ONLY the translation, no labels)\n\n${examples.join('\n\n---\n\n')}`;
 }
 
 /** Pre-loaded training data from training_conversations.json */
