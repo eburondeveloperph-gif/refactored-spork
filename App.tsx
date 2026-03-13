@@ -20,6 +20,7 @@
 
 import { useEffect } from 'react';
 import ControlTray from './components/console/control-tray/ControlTray';
+import ErrorBoundary from './components/ErrorBoundary';
 import ErrorScreen from './components/demo/ErrorScreen';
 import StreamingConsole from './components/demo/streaming-console/StreamingConsole';
 
@@ -29,10 +30,36 @@ import { LiveAPIProvider } from './contexts/LiveAPIContext';
 import { useAuth, updateUserSettings } from './lib/auth';
 import { useSettings } from './lib/state';
 
-const API_KEY = process.env.API_KEY;
-if (typeof API_KEY !== 'string') {
-  throw new Error(
-    'Missing required environment variable: API_KEY'
+const API_KEY = process.env.API_KEY ?? process.env.GEMINI_API_KEY ?? '';
+
+function SetupScreen() {
+  return (
+    <div
+      style={{
+        minHeight: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+        background: '#0a0a0a',
+        color: '#e1e2e3',
+        fontFamily: 'system-ui, sans-serif',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 48, marginBottom: 16 }}>🔑</div>
+      <h1 style={{ fontSize: 20, marginBottom: 8 }}>API key required</h1>
+      <p style={{ opacity: 0.7, marginBottom: 16, maxWidth: 400 }}>
+        Add <code style={{ background: '#2a2f31', padding: '2px 6px', borderRadius: 4 }}>GEMINI_API_KEY</code> to your <code style={{ background: '#2a2f31', padding: '2px 6px', borderRadius: 4 }}>.env.local</code> file.
+      </p>
+      <p style={{ opacity: 0.7, fontSize: 14, maxWidth: 400 }}>
+        Get your key at{' '}
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" style={{ color: '#1f94ff' }}>
+          Google AI Studio
+        </a>
+      </p>
+    </div>
   );
 }
 
@@ -61,6 +88,10 @@ function App() {
 
     return () => unsub();
   }, [user]);
+
+  if (!API_KEY || typeof API_KEY !== 'string') {
+    return <SetupScreen />;
+  }
 
   return (
     <div className="App">
